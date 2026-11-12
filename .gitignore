@@ -1,0 +1,66 @@
+﻿# ==========================================
+# WEBSITE UTAMA MIRAI GRESIK
+# ==========================================
+
+# FTP metadata
+.ftp-deploy-sync-state.json
+.ftpquota
+
+# Local editor
+.vscode/
+
+# Hosting-specific configuration
+/config/config.php
+/.well-known/
+
+# Composer dependencies
+/vendor/
+
+# ==========================================
+# PROJECT LAIN - JANGAN MASUK REPOSITORY INI
+# ==========================================
+
+/data.miraigresik.com/
+/mirai-data/
+/miraigresik/
+/mgs.miraigresik.com.backup/
+/daftar.miraigresik.com/
+/surat.miraigresik.com/
+
+# ==========================================
+# BACKUP DAN ARSIP
+# ==========================================
+
+*.zip
+*_backup.*
+*backup*.*
+*.save
+*.save.*
+
+# ==========================================
+# ENVIRONMENT DAN RAHASIA
+# ==========================================
+
+.env
+.env.*
+
+# ==========================================
+# LOG
+# ==========================================
+
+*.log
+error_log
+**/error_log
+
+# ==========================================
+# OPERATING SYSTEM
+# ==========================================
+
+Thumbs.db
+.DS_Store
+
+# Dokumen administrasi - tunggu verifikasi
+/img/surat_izin_orang_tua.doc
+/img/surat_izin_orang_tua.pdf
+/img/surat_pernyataan_magang.doc
+/img/surat_pernyataan_magang.pdf
