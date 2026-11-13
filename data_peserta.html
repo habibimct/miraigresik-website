@@ -299,10 +299,10 @@
                     </div>
 
                     <!-- Bahasa yang dikuasai -->
-                    <div class="ms-3">
-                      <label class="form-label">Bahasa yang dikuasai *</label><br>
+                    <div class="ms-3" data-checkbox-group="bahasa" role="group" aria-labelledby="bahasa-label" aria-required="true">
+                      <label class="form-label" id="bahasa-label">Bahasa yang dikuasai *</label><br>
                       <div class="form-check form-check-inline">
-                        <input class="form-check-input" type="checkbox" name="bahasa[]" id="indo" value="Indonesia">
+                        <input class="form-check-input" type="checkbox" name="bahasa[]" id="indo" value="Indonesia" checked>
                         <label class="form-check-label" for="indo">Indonesia</label>
                       </div>
                       <div class="form-check form-check-inline">
@@ -333,6 +333,7 @@
                         <input class="form-check-input" type="checkbox" name="bahasa[]" id="spa" value="Spanyol">
                         <label class="form-check-label" for="spa">Spanyol</label>
                       </div>
+                      <div class="text-danger small mt-2" data-checkbox-error role="alert" hidden></div>
                     </div>
                     <!-- tambahkan checkbox lain sesuai daftar -->
                   </div>
@@ -623,8 +624,8 @@
                   </div>
 
                   <!-- Materi yang dikuasai -->
-                  <div class="ms-3">
-                    <label class="form-label">Materi yang dikuasai *</label><br>
+                  <div class="ms-3" data-checkbox-group="materi-dikuasai" role="group" aria-labelledby="materi-dikuasai-label" aria-required="true">
+                    <label class="form-label" id="materi-dikuasai-label">Materi yang dikuasai *</label><br>
                     <div class="form-check form-check-inline">
                       <input class="form-check-input" type="checkbox" name="materi_dikuasai[]" id="kosa"
                         value="Kosa-kata">
@@ -652,11 +653,12 @@
                       <input class="form-check-input" type="checkbox" name="materi_dikuasai[]" id="koska" value="Kosakata karakter">
                       <label class="form-check-label" for="koska">Kosakata karakter</label>
                     </div>
+                    <div class="text-danger small mt-2" data-checkbox-error role="alert" hidden></div>
                   </div>
 
                   <!-- Materi yang tidak dikuasai -->
-                  <div class="ms-3 mt-3">
-                    <label class="form-label">Materi yang tidak dikuasai *</label><br>
+                  <div class="ms-3 mt-3" data-checkbox-group="materi-tidak-dikuasai" role="group" aria-labelledby="materi-tidak-dikuasai-label" aria-required="true">
+                    <label class="form-label" id="materi-tidak-dikuasai-label">Materi yang tidak dikuasai *</label><br>
                     <div class="form-check form-check-inline">
                       <input class="form-check-input" type="checkbox" name="materi_tidak_dikuasai[]" id="kosat"
                         value="Kosa-kata">
@@ -687,6 +689,7 @@
                         value="Kosakata karakter">
                       <label class="form-check-label" for="koskat">Kosakata karakter</label>
                     </div>
+                    <div class="text-danger small mt-2" data-checkbox-error role="alert" hidden></div>
                   </div>
                 </div>
               </div>

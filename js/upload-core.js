@@ -1,14 +1,14 @@
 /*************************************************************************
  * upload-core.js
  * LPK MIRAI GRESIK
- * Core Upload Engine
+ * Core Upload Engine - revised checkbox, autosave and upload handling
  *************************************************************************/
 
 const UploadCore = {
-
     compressedFiles: {},
-
     config: {},
+    pendingFileTasks: new Map(),
+    fileTaskIds: {},
 
     IMAGE_TYPES: [
         "image/jpeg",
@@ -17,317 +17,335 @@ const UploadCore = {
         "image/webp"
     ],
 
-    PDF_TYPES: [
-        "application/pdf"
-    ],
+    PDF_TYPES: ["application/pdf"],
 
     MAX_IMAGE_SIZE: 20 * 1024 * 1024,
+    MAX_PDF_SIZE: 10 * 1024 * 1024,
 
-    MAX_PDF_SIZE: 10 * 1024 * 1024
-
+    DRAFT_VERSION: 2
 };
+
+/*************************************************************************
+ * Helpers
+ *************************************************************************/
 
 UploadCore.formatSize = function (bytes) {
-
-    if (bytes < 1024) {
-        return bytes + " B";
-    }
-
-    if (bytes < 1024 * 1024) {
-        return (bytes / 1024).toFixed(1) + " KB";
-    }
-
+    if (bytes < 1024) return bytes + " B";
+    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + " KB";
     return (bytes / 1024 / 1024).toFixed(2) + " MB";
-
 };
 
-UploadCore.showInfo = function (input, text, color = "green") {
+UploadCore.getForm = function () {
+    return document.querySelector(this.config.form);
+};
 
-    let info = input.parentNode.querySelector(".upload-info");
+UploadCore.showInfo = function (input, message, color = "green") {
+    if (!input || !input.parentNode) return;
 
-    if (!info) {
-
+    let info = input.__uploadCoreInfo;
+    if (!info || !info.isConnected) {
         info = document.createElement("small");
-        info.className = "upload-info";
+        info.className = "upload-info d-block mt-1";
+        info.setAttribute("data-upload-core", "true");
         input.parentNode.appendChild(info);
-
+        input.__uploadCoreInfo = info;
     }
 
+    // Use textContent: file names and messages must not be interpreted as HTML.
+    info.textContent = message;
     info.style.display = "block";
     info.style.color = color;
-    info.innerHTML = text;
-
 };
 
-UploadCore.compressImage = async function (file) {
+UploadCore.removeInfo = function (input) {
+    if (input && input.__uploadCoreInfo) {
+        input.__uploadCoreInfo.remove();
+        input.__uploadCoreInfo = null;
+    }
+};
 
-    if (!file.type.startsWith("image/")) {
+UploadCore.clearUploadState = function () {
+    Object.keys(this.compressedFiles).forEach((key) => {
+        delete this.compressedFiles[key];
+    });
+
+    this.pendingFileTasks.clear();
+    this.fileTaskIds = {};
+
+    document.querySelectorAll(".upload-info[data-upload-core]").forEach((node) => node.remove());
+
+    if (this.config.ui) {
+        $(this.config.ui.summaryCard).hide();
+        $(this.config.ui.summaryList).empty();
+        $(this.config.ui.summaryTotal).text("0 KB");
+        $(this.config.ui.progressBar).hide().val(0);
+        $(this.config.ui.progressText).text("");
+        $(this.config.ui.loading).hide();
+    }
+};
+
+/*************************************************************************
+ * Image Compression
+ *************************************************************************/
+
+UploadCore.compressImage = async function (file) {
+    if (!file.type.startsWith("image/") || typeof Compressor === "undefined") {
         return file;
     }
 
     return new Promise((resolve) => {
-
-        new Compressor(file, {
-
-            quality: 0.75,
-            maxWidth: 1600,
-            maxHeight: 1600,
-
-            success(result) {
-
-                resolve(
-                    new File(
-                        [result],
-                        file.name,
-                        {
-                            type: "image/jpeg",
-                            lastModified: Date.now()
-                        }
-                    )
-                );
-
-            },
-
-            error() {
-
-                resolve(file);
-
-            }
-        });
+        try {
+            new Compressor(file, {
+                quality: 0.75,
+                maxWidth: 1600,
+                maxHeight: 1600,
+                success(result) {
+                    resolve(new File([result], file.name, {
+                        type: "image/jpeg",
+                        lastModified: Date.now()
+                    }));
+                },
+                error() {
+                    // Do not lose the original file if compression fails.
+                    resolve(file);
+                }
+            });
+        } catch (error) {
+            console.error("Image compression error:", error);
+            resolve(file);
+        }
     });
 };
 
 /*************************************************************************
- * Update Summary
+ * Upload Summary
  *************************************************************************/
 
 UploadCore.updateSummary = function () {
+    if (!this.config.summary || !this.config.ui) return;
 
-    if (!this.config.summary) {
-        return;
-    }
+    const list = document.querySelector(this.config.ui.summaryList);
+    const card = document.querySelector(this.config.ui.summaryCard);
+    const totalNode = document.querySelector(this.config.ui.summaryTotal);
+    if (!list || !card || !totalNode) return;
 
-    let html = "";
+    list.replaceChildren();
+
     let total = 0;
-    let adaFile = false;
+    let hasFile = false;
 
-    Object.keys(this.config.files).forEach((field) => {
+    Object.keys(this.config.files || {}).forEach((field) => {
+        const file = this.compressedFiles[field];
+        const row = document.createElement("tr");
+        row.setAttribute("data-file", field);
 
-        if (this.compressedFiles[field]) {
+        const nameCell = document.createElement("td");
+        nameCell.textContent = this.config.files[field];
 
-            adaFile = true;
+        const sizeCell = document.createElement("td");
+        sizeCell.className = "text-end";
 
-            total += this.compressedFiles[field].size;
+        const statusCell = document.createElement("td");
+        statusCell.className = "summary-status";
 
-            html += `
-            <tr data-file="${field}">
-                <td>
-                    ${this.config.files[field]}
-                </td>
-
-                <td class="text-end text-success">
-                    ${this.formatSize(this.compressedFiles[field].size)}
-                </td>
-
-                <td class="summary-status text-primary">
-                    Siap
-                </td>
-            </tr>
-        `;
-
+        if (file) {
+            hasFile = true;
+            total += file.size;
+            sizeCell.classList.add("text-success");
+            sizeCell.textContent = this.formatSize(file.size);
+            statusCell.classList.add("text-primary");
+            statusCell.textContent = "Siap";
         } else {
-
-            html += `
-            <tr data-file="${field}">
-                <td>
-                    ${this.config.files[field]}
-                </td>
-
-                <td class="text-end text-secondary">
-                    -
-                </td>
-
-                <td class="summary-status text-secondary">
-                    Belum
-                </td>
-            </tr>
-        `;
+            sizeCell.classList.add("text-secondary");
+            sizeCell.textContent = "-";
+            statusCell.classList.add("text-secondary");
+            statusCell.textContent = "Belum";
         }
+
+        row.append(nameCell, sizeCell, statusCell);
+        list.appendChild(row);
     });
 
-    if (!adaFile) {
-        $(this.config.ui.summaryCard).hide();
-
-        return;
-    }
-
-    $(this.config.ui.summaryCard).show();
-    $(this.config.ui.summaryList).html(html);
-    $(this.config.ui.summaryTotal).text(
-        this.formatSize(total)
-    );
+    card.style.display = hasFile ? "block" : "none";
+    totalNode.textContent = this.formatSize(total);
 };
 
-/*************************************************************************
- * Update Status Summary
- *************************************************************************/
-
 UploadCore.setStatus = function (field, className, text) {
+    const list = document.querySelector(this.config.ui.summaryList);
+    if (!list) return;
 
-    const row = $(this.config.ui.summaryList)
-        .find(`tr[data-file="${field}"]`);
+    const row = Array.from(list.querySelectorAll("tr[data-file]"))
+        .find((item) => item.getAttribute("data-file") === field);
+    if (!row) return;
 
-    const status = row.find(".summary-status");
+    const status = row.querySelector(".summary-status");
+    if (!status) return;
 
-    status.removeClass(
-        "text-secondary text-primary text-warning text-success text-danger"
+    status.classList.remove(
+        "text-secondary", "text-primary", "text-warning", "text-success", "text-danger"
     );
-
-    status.addClass(className);
-    status.text(text);
+    status.classList.add(className);
+    status.textContent = text;
 };
 
 /*************************************************************************
  * Prepare File
  *************************************************************************/
 
-UploadCore.prepareFile = async function (input) {
+UploadCore.handleFileChange = function (input) {
+    const field = input.name || input.id;
+    if (!field) return Promise.resolve();
 
-    if (input.files.length === 0) {
+    const taskId = (this.fileTaskIds[field] || 0) + 1;
+    this.fileTaskIds[field] = taskId;
+
+    const task = this.prepareFile(input, taskId)
+        .catch((error) => {
+            console.error("File preparation error:", error);
+            if (this.fileTaskIds[field] === taskId) {
+                delete this.compressedFiles[field];
+                this.showInfo(input, "Gagal memproses file. Silakan pilih ulang.", "red");
+                this.updateSummary();
+            }
+        })
+        .finally(() => {
+            if (this.pendingFileTasks.get(field) === task) {
+                this.pendingFileTasks.delete(field);
+            }
+        });
+
+    this.pendingFileTasks.set(field, task);
+    return task;
+};
+
+UploadCore.prepareFile = async function (input, taskId) {
+    const field = input.name || input.id;
+    if (!field) return;
+
+    if (!input.files || input.files.length === 0) {
+        delete this.compressedFiles[field];
+        this.removeInfo(input);
+        this.updateSummary();
+        this.setStatus(field, "text-secondary", "Belum");
         return;
     }
 
     const file = input.files[0];
+    const isImage = this.IMAGE_TYPES.includes(file.type);
+    const isPdf = this.PDF_TYPES.includes(file.type);
 
-    if (
-        !this.IMAGE_TYPES.includes(file.type) &&
-        !this.PDF_TYPES.includes(file.type)
-    ) {
-
+    if (!isImage && !isPdf) {
         input.value = "";
-        delete this.compressedFiles[input.name];
-        this.showInfo(
-            input,
-            "❌ Format file tidak didukung",
-            "red"
-        );
-
+        delete this.compressedFiles[field];
+        this.showInfo(input, "Format file tidak didukung. Gunakan JPG, PNG, WEBP, atau PDF.", "red");
         this.updateSummary();
-
+        this.setStatus(field, "text-danger", "Format salah");
         return;
     }
 
-    if (
-        this.IMAGE_TYPES.includes(file.type) &&
-        file.size > this.MAX_IMAGE_SIZE
-    ) {
-
+    if (isImage && file.size > this.MAX_IMAGE_SIZE) {
         input.value = "";
-        delete this.compressedFiles[input.name];
-        this.showInfo(
-            input,
-            "❌ Maksimal 20 MB",
-            "red"
-        );
-
+        delete this.compressedFiles[field];
+        this.showInfo(input, "Ukuran gambar maksimal 20 MB.", "red");
         this.updateSummary();
-
+        this.setStatus(field, "text-danger", "Terlalu besar");
         return;
     }
 
-    if (
-        this.PDF_TYPES.includes(file.type)
-    ) {
-
-        this.compressedFiles[input.name] = file;
-        this.showInfo(
-            input,
-            "✔ PDF : " + this.formatSize(file.size),
-            "#00cc66"
-        );
-
+    if (isPdf && file.size > this.MAX_PDF_SIZE) {
+        input.value = "";
+        delete this.compressedFiles[field];
+        this.showInfo(input, "Ukuran PDF maksimal 10 MB.", "red");
         this.updateSummary();
-        this.setStatus(
-            input.name,
-            "text-primary",
-            "Siap"
-        );
-
+        this.setStatus(field, "text-danger", "Terlalu besar");
         return;
     }
 
-    this.showInfo(
-        input,
-        "Mengompres gambar...",
-        "orange"
-    );
+    if (isPdf) {
+        if (this.fileTaskIds[field] !== taskId) return;
+        this.compressedFiles[field] = file;
+        this.showInfo(input, "PDF siap: " + this.formatSize(file.size), "#00a65a");
+        this.updateSummary();
+        this.setStatus(field, "text-primary", "Siap");
+        return;
+    }
 
-    const hasil = await this.compressImage(file);
+    this.showInfo(input, "Mengompres gambar...", "#b7791f");
+    const result = await this.compressImage(file);
 
-    this.compressedFiles[input.name] = hasil;
+    // Ignore a stale compression result if the user changed the file meanwhile.
+    if (this.fileTaskIds[field] !== taskId) return;
 
-    const persen = (
-        ((file.size - hasil.size) / file.size) * 100
-    ).toFixed(0);
+    this.compressedFiles[field] = result;
+    const savedPercent = file.size > 0
+        ? Math.round(((file.size - result.size) / file.size) * 100)
+        : 0;
 
-    this.showInfo(
+    const message = result === file
+        ? "Gambar siap (tanpa kompresi): " + this.formatSize(result.size)
+        : "Gambar siap: " + this.formatSize(file.size) + " → " +
+          this.formatSize(result.size) + " (hemat " + savedPercent + "%)";
 
-        input,
-
-        "✔ "
-        + this.formatSize(file.size)
-        + " → "
-        + this.formatSize(hasil.size)
-        + " (hemat "
-        + persen
-        + "%)",
-
-        "#00cc66"
-
-    );
-
+    this.showInfo(input, message, "#00a65a");
     this.updateSummary();
-    this.setStatus(
-        input.name,
-        "text-primary",
-        "Siap"
-    );
+    this.setStatus(field, "text-primary", "Siap");
+};
+
+/*************************************************************************
+ * Form Data Builder
+ *************************************************************************/
+
+UploadCore.buildFormData = function (form) {
+    // Native FormData automatically excludes unchecked checkboxes/radios,
+    // and correctly preserves repeated names such as bahasa[] and keluarga[].
+    const data = new FormData(form);
+
+    // Replace original selected files with compressed versions when available.
+    form.querySelectorAll('input[type="file"][name]').forEach((input) => {
+        data.delete(input.name);
+
+        const preparedFile = this.compressedFiles[input.name];
+        const originalFile = input.files && input.files.length ? input.files[0] : null;
+        const file = preparedFile || originalFile;
+
+        if (file) {
+            data.append(input.name, file, file.name);
+        }
+    });
+
+    return data;
 };
 
 /*************************************************************************
  * Submit Form
  *************************************************************************/
 
-UploadCore.submit = function (form) {
+UploadCore.submit = async function (form) {
+    if (this.isSubmitting) return;
 
-    const data = new FormData();
+    // Respect HTML required fields before custom validation.
+    if (typeof form.reportValidity === "function" && !form.reportValidity()) {
+        return;
+    }
 
-    $(form).find(":input").each((i, element) => {
+    // Wait for image compression/file preparation to finish.
+    if (this.pendingFileTasks.size > 0) {
+        await Promise.all(Array.from(this.pendingFileTasks.values()));
+    }
 
-        if (!element.name) return;
+    if (typeof this.config.beforeSubmit === "function") {
+        const isValid = this.config.beforeSubmit(form);
+        if (isValid === false) return;
+    }
 
-        if (element.type === "file") {
-            if (this.compressedFiles[element.name]) {
-                data.append(
-                    element.name,
-                    this.compressedFiles[element.name],
-                    this.compressedFiles[element.name].name
-                );
-            }
-        }
-        else if (
-            element.type !== "submit" &&
-            element.type !== "button"
-        ) {
-            data.append(
-                element.name,
-                $(element).val()
-            );
-        }
-    });
+    // Save the latest form values before sending. Files themselves are not
+    // stored in localStorage; they must be selected again after a page reload.
+    this.saveForm();
 
+    const data = this.buildFormData(form);
     const submitButton = $(this.config.submitButton);
 
+    this.isSubmitting = true;
     submitButton.prop("disabled", true);
 
     $(this.config.ui.progressBar).show().val(0);
@@ -335,71 +353,70 @@ UploadCore.submit = function (form) {
     $(this.config.ui.loading).hide();
 
     Swal.fire({
-
         title: "Mengirim Data",
         html: "Mohon tunggu...",
-
         allowOutsideClick: false,
-
+        allowEscapeKey: false,
         didOpen() {
             Swal.showLoading();
         }
-
     });
 
     $.ajax({
-
         url: this.config.php,
         type: "POST",
-        data: data,
+        data,
         processData: false,
         contentType: false,
         cache: false,
+        dataType: "text",
 
         xhr: () => {
-
             const xhr = new window.XMLHttpRequest();
+            if (xhr.upload) {
+                xhr.upload.addEventListener("progress", (event) => {
+                    if (!event.lengthComputable) return;
 
-            xhr.upload.addEventListener("progress", (evt) => {
+                    const percent = Math.round((event.loaded / event.total) * 100);
+                    $(this.config.ui.progressBar).val(percent);
+                    $(this.config.ui.progressText).text("Upload " + percent + "%");
 
-                if (evt.lengthComputable) {
-                    const persen = Math.round(
-                        evt.loaded / evt.total * 100
-                    );
-
-                    $(this.config.ui.progressBar).val(persen);
-                    $(this.config.ui.progressText).text(
-                        "Upload " + persen + "%"
-                    );
-
-                    if (persen === 100) {
-
+                    if (percent >= 100) {
                         $(this.config.ui.loading).show();
-                        $(this.config.ui.progressText).text(
-                            "Mohon tunggu... Mengirim email..."
-                        );
+                        $(this.config.ui.progressText).text("Mohon tunggu... Mengirim email...");
                     }
-                }
-            });
-
+                });
+            }
             return xhr;
         },
 
         success: (response) => {
+            const responseText = String(response).trim();
+
+            if (this.config.successResponse &&
+                responseText !== this.config.successResponse &&
+                responseText !== "TRIAL_CLASS") {
+                Swal.close();
+                Swal.fire({
+                    icon: "error",
+                    title: "Respons server tidak dikenali",
+                    text: "Server mengembalikan respons yang tidak sesuai. Periksa log server sebelum mengirim ulang."
+                });
+                return;
+            }
 
             Swal.close();
-            
-            // Khusus Trial Class
-            if (response.trim() === "TRIAL_CLASS") {
-            
-                $(this.config.ui.loading).hide();
-                $(this.config.ui.progressText).text("Selesai");
-            
-                // Reset form
+            $(this.config.ui.loading).hide();
+            $(this.config.ui.progressText).text("Selesai");
+
+            if (responseText === "TRIAL_CLASS") {
                 form.reset();
-                UploadCore.clearStorage();
-                UploadCore.reset(true);
-            
+                if (typeof this.config.onFormReset === "function") {
+                    this.config.onFormReset(form);
+                }
+                this.clearStorage();
+                this.clearUploadState();
+
                 Swal.fire({
                     icon: "success",
                     title: "Pendaftaran Berhasil",
@@ -408,12 +425,21 @@ UploadCore.submit = function (form) {
                 }).then(() => {
                     window.location.href = "https://chat.whatsapp.com/JoqQzmvORCjIMgPugJTx8i";
                 });
-            
                 return;
             }
 
-            $(this.config.ui.loading).hide();
-            $(this.config.ui.progressText).text("Selesai");
+            const storage = this.getStorage();
+            if (storage) {
+                storage.status = "submitted";
+                storage.submittedAt = new Date().toISOString();
+                this.writeStorage(storage);
+            }
+
+            form.reset();
+            if (typeof this.config.onFormReset === "function") {
+                this.config.onFormReset(form);
+            }
+            this.clearUploadState();
 
             Swal.fire({
                 icon: "success",
@@ -425,85 +451,59 @@ UploadCore.submit = function (form) {
                 confirmButtonText: "💾 Ya, Simpan",
                 cancelButtonText: "🗑️ Hapus"
             }).then((result) => {
-                if (result.isConfirmed) {
-                    UploadCore.reset(false);
-                } else {
-                    UploadCore.clearStorage();
-                    UploadCore.reset(true);
+                if (!result.isConfirmed) {
+                    this.clearStorage();
                 }
             });
-
-            form.reset();
-
-            const storage = this.getStorage();
-
-            if (storage) {
-                storage.status = "submitted";
-                storage.submittedAt = new Date().toISOString();
-                localStorage.setItem(
-                    this.config.storageKey,
-                    JSON.stringify(storage)
-                );
-            }
         },
 
         error: (xhr) => {
-
             Swal.close();
-
             $(this.config.ui.loading).hide();
             $(this.config.ui.progressText).text("Terjadi Kesalahan");
 
+            const responseMessage = String(xhr.responseText || "").trim();
+            if (responseMessage) {
+                // Keep detailed server responses in the browser console only.
+                console.error("Server response:", responseMessage);
+            }
+
+            const safeMessage = this.config.showServerError && responseMessage
+                ? responseMessage.replace(/<[^>]*>/g, " ").slice(0, 500)
+                : (this.config.errorMessage ||
+                   "Pengiriman gagal. Data formulir tetap tersedia. Silakan coba lagi atau hubungi admin LPK Mirai.");
+
             Swal.fire({
-
                 icon: "error",
-                title: "Upload Gagal",
-                text: xhr.responseText
-
+                title: "Pengiriman Gagal",
+                text: safeMessage
             });
         },
 
         complete: () => {
+            this.isSubmitting = false;
             submitButton.prop("disabled", false);
         }
-
     });
-
 };
 
 /*************************************************************************
- * Reset Form
+ * Reset Upload State
  *************************************************************************/
 
-UploadCore.reset = function (clearStorage = true) {
+UploadCore.reset = function (clearStorage = true, showMessage = false) {
+    if (clearStorage) this.clearStorage();
+    this.clearUploadState();
 
-    if (clearStorage) {
-        this.clearStorage();
+    if (showMessage) {
+        Swal.fire({
+            icon: "success",
+            title: "Berhasil",
+            text: "Form berhasil direset.",
+            timer: 1500,
+            showConfirmButton: false
+        });
     }
-
-    Swal.fire({
-
-        icon: "success",
-        title: "Berhasil",
-        text: "Form berhasil dikirim.",
-        timer: 1800,
-        showConfirmButton: false
-
-    });
-
-    Object.keys(this.compressedFiles).forEach((key) => {
-
-        delete this.compressedFiles[key];
-
-    });
-
-    $(".upload-info").remove();
-    $(this.config.ui.summaryCard).hide();
-    $(this.config.ui.summaryList).html("");
-    $(this.config.ui.summaryTotal).text("0 KB");
-
-    this.updateSummary();
-
 };
 
 /*************************************************************************
@@ -511,139 +511,202 @@ UploadCore.reset = function (clearStorage = true) {
  *************************************************************************/
 
 UploadCore.saveForm = function () {
-
     if (!this.config.autoSave) return;
+
+    const form = this.getForm();
+    if (!form) return;
+
+    const controls = Array.from(form.elements).filter((element) => {
+        if (!element.name || element.disabled) return false;
+        if (["file", "submit", "button", "reset", "image"].includes(element.type)) return false;
+        return true;
+    });
 
     const data = {};
+    const grouped = new Map();
 
-    $(this.config.form)
-        .find(":input")
-        .each(function () {
+    controls.forEach((element) => {
+        const name = element.name;
+        if (!grouped.has(name)) grouped.set(name, []);
+        grouped.get(name).push(element);
+    });
 
-            if (!this.name) return;
-            if (this.type === "file") return;
-            if (this.type === "submit") return;
-            if (this.type === "button") return;
-            if (this.type === "checkbox") {
+    grouped.forEach((elements, name) => {
+        const isArrayField = name.endsWith("[]") || elements.length > 1;
+        const first = elements[0];
 
-                data[this.name] = this.checked;
-
-                return;
-
+        if (first.type === "checkbox") {
+            if (isArrayField) {
+                data[name] = elements
+                    .filter((element) => element.checked)
+                    .map((element) => element.value);
+            } else {
+                data[name] = Boolean(first.checked);
             }
+            return;
+        }
 
-            if (this.type === "radio") {
+        if (first.type === "radio") {
+            const selected = elements.find((element) => element.checked);
+            if (selected) data[name] = selected.value;
+            return;
+        }
 
-                if (this.checked) {
-                    data[this.name] = this.value;
-                }
+        if (first.tagName === "SELECT" && first.multiple) {
+            data[name] = Array.from(first.selectedOptions).map((option) => option.value);
+            return;
+        }
 
-                return;
-            }
-
-            data[this.name] = $(this).val();
-        });
+        const values = elements.map((element) => $(element).val() ?? "");
+        data[name] = isArrayField ? values : values[0];
+    });
 
     const storage = {
+        version: this.DRAFT_VERSION,
         status: "draft",
         savedAt: new Date().toISOString(),
-        data: data
+        data
     };
 
-    localStorage.setItem(
-        this.config.storageKey,
-        JSON.stringify(storage)
-    );
+    this.writeStorage(storage);
+};
 
+UploadCore.writeStorage = function (storage) {
+    try {
+        localStorage.setItem(this.config.storageKey, JSON.stringify(storage));
+        return true;
+    } catch (error) {
+        console.error("Tidak dapat menyimpan draft:", error);
+        if (typeof Swal !== "undefined") {
+            Swal.fire({
+                icon: "warning",
+                title: "Draft tidak dapat disimpan",
+                text: "Penyimpanan browser penuh atau tidak tersedia. Data formulir masih dapat dikirim selama halaman ini tidak ditutup."
+            });
+        }
+        return false;
+    }
 };
 
 /*************************************************************************
- * Load Form
+ * Restore Draft
  *************************************************************************/
 
-UploadCore.loadForm = function () {
+UploadCore.ensureDynamicFamilyFields = function (data, form) {
+    const familyNames = [
+        "keluarga_hubungan[]",
+        "keluarga_nama[]",
+        "keluarga_tgl_lahir[]",
+        "keluarga_usia[]",
+        "keluarga_pekerjaan[]"
+    ];
 
+    const maxCount = familyNames.reduce((max, name) => {
+        const value = data[name];
+        return Math.max(max, Array.isArray(value) ? value.length : (value !== undefined ? 1 : 0));
+    }, 0);
+
+    const currentCount = form.querySelectorAll('[name="keluarga_nama[]"]').length;
+    const addButton = form.querySelector("#btn-add-keluarga");
+
+    if (!addButton) return;
+
+    for (let index = currentCount; index < maxCount; index += 1) {
+        addButton.click();
+    }
+};
+
+UploadCore.loadForm = function () {
     if (!this.config.autoSave) return;
 
-    const json = localStorage.getItem(
-        this.config.storageKey
-    );
+    const storage = this.getStorage();
+    if (!storage || !storage.data) return;
 
-    if (!json) return;
+    const form = this.getForm();
+    if (!form) return;
 
-    const storage = JSON.parse(json);
-    const data = storage.data || {};
+    const data = storage.data;
+    this.ensureDynamicFamilyFields(data, form);
 
     Object.keys(data).forEach((name) => {
+        const elements = Array.from(form.elements).filter((element) => element.name === name);
+        if (!elements.length) return;
 
-        const input = $(this.config.form).find("[name='" + name + "']");
+        const first = elements[0];
+        const value = data[name];
 
-        if (!input.length) return;
-
-        const el = input[0];
-
-        if (el.type === "checkbox") {
-            el.checked = data[name];
+        if (first.type === "checkbox") {
+            if (Array.isArray(value)) {
+                elements.forEach((element) => {
+                    element.checked = value.includes(element.value);
+                });
+            } else if (typeof value === "boolean" && !name.endsWith("[]")) {
+                // Legacy support for standalone checkbox fields.
+                first.checked = value;
+            }
+            // Older versions stored only the last checkbox's boolean for [] groups.
+            // Ignore that legacy value instead of incorrectly checking every option.
             return;
         }
 
-        if (el.type === "radio") {
-            input.each(function () {
-                this.checked = this.value === data[name];
+        if (first.type === "radio") {
+            elements.forEach((element) => {
+                element.checked = element.value === value;
             });
-
             return;
         }
 
-        input.val(data[name]);
+        if (first.tagName === "SELECT" && first.multiple) {
+            $(first).val(Array.isArray(value) ? value : [value]);
+            return;
+        }
+
+        if (name.endsWith("[]") || elements.length > 1) {
+            const values = Array.isArray(value) ? value : [value];
+            elements.forEach((element, index) => {
+                if (index < values.length) $(element).val(values[index]);
+            });
+            return;
+        }
+
+        $(first).val(value);
     });
+
+    if (typeof this.config.onAfterRestore === "function") {
+        this.config.onAfterRestore(form, storage);
+    }
+
+    // Persist the normalized draft format after restoration.
+    this.saveForm();
 };
 
 /*************************************************************************
- * Get Storage
+ * Storage Helpers
  *************************************************************************/
 
 UploadCore.getStorage = function () {
+    if (!this.config.storageKey) return null;
 
-    const json = localStorage.getItem(
-        this.config.storageKey
-    );
+    const json = localStorage.getItem(this.config.storageKey);
+    if (!json) return null;
 
-    if (!json) {
+    try {
+        return JSON.parse(json);
+    } catch (error) {
+        console.error("Draft tidak dapat dibaca:", error);
         return null;
     }
-
-    return JSON.parse(json);
 };
-
-/*************************************************************************
- * Cek Draft
- *************************************************************************/
 
 UploadCore.hasDraft = function () {
-
-    if (!this.config.autoSave) {
-        return false;
-    }
-
-    return localStorage.getItem(
-        this.config.storageKey
-    ) !== null;
-
+    if (!this.config.autoSave) return false;
+    const storage = this.getStorage();
+    return Boolean(storage && storage.data && Object.keys(storage.data).length);
 };
 
-/*************************************************************************
- * Clear Storage
- *************************************************************************/
-
 UploadCore.clearStorage = function () {
-
-    if (!this.config.autoSave) return;
-
-    localStorage.removeItem(
-        this.config.storageKey
-    );
-
+    if (!this.config.autoSave || !this.config.storageKey) return;
+    localStorage.removeItem(this.config.storageKey);
 };
 
 /*************************************************************************
@@ -651,74 +714,74 @@ UploadCore.clearStorage = function () {
  *************************************************************************/
 
 UploadCore.init = function (config) {
-
     this.config = {
-
         autoSave: false,
         storageKey: "uploadForm",
         summary: true,
-
+        files: {},
+        beforeSubmit: null,
+        onAfterRestore: null,
+        onFormReset: null,
+        successResponse: null,
+        showServerError: false,
+        errorMessage: "Pengiriman gagal. Data formulir tetap tersedia. Silakan coba lagi atau hubungi admin LPK Mirai.",
         ...config
-
     };
 
     $(document).ready(() => {
+        const form = this.getForm();
+        if (!form) {
+            console.error("UploadCore: form tidak ditemukan:", this.config.form);
+            return;
+        }
 
-        /*************************************************************************
-         * Konfirmasi Draft
-         *************************************************************************/
+        // Initialize default checkbox and other form-specific behavior.
+        if (typeof this.config.onFormReady === "function") {
+            this.config.onFormReady(form);
+        }
 
+        // Draft confirmation. File inputs cannot be restored by browsers and
+        // must be selected again after the draft is restored.
         if (this.hasDraft()) {
-
             Swal.fire({
-
                 icon: "question",
                 title: "Lanjutkan Pengisian?",
                 html:
-                    "Ditemukan data formulir yang belum selesai.<br><br>" +
-                    "Apakah ingin melanjutkan pengisian?",
+                    "Ditemukan data formulir yang tersimpan.<br><br>" +
+                    "Lanjutkan pengisian dari data sebelumnya?" +
+                    "<br><small>Dokumen yang pernah dipilih perlu diunggah kembali.</small>",
                 confirmButtonText: "Lanjutkan",
                 cancelButtonText: "Mulai Baru",
                 showCancelButton: true,
                 allowOutsideClick: false
-
             }).then((result) => {
-
                 if (result.isConfirmed) {
                     this.loadForm();
                 } else {
                     this.clearStorage();
-                    $(this.config.form)[0].reset();
+                    form.reset();
+                    if (typeof this.config.onFormReset === "function") {
+                        this.config.onFormReset(form);
+                    }
                 }
             });
         }
 
-        // ===============================
-        // Upload file
-        // ===============================
-        $("input[type=file]").change((e) => {
-            this.prepareFile(e.target);
+        // File preparation; keep only the latest selected file per input.
+        $(form).on("change", 'input[type="file"]', (event) => {
+            this.handleFileChange(event.currentTarget);
         });
 
-        // ===============================
-        // Auto Save setiap perubahan
-        // ===============================
-        $(this.config.form).on("input change", ":input", () => {
+        // Autosave all regular fields and selected checkbox/radio values.
+        $(form).on("input change", ":input", () => {
             this.saveForm();
         });
 
-        // ===============================
-        // Summary upload
-        // ===============================
         this.updateSummary();
 
-        // ===============================
-        // Submit
-        // ===============================
-        $(this.config.form).submit((e) => {
-            e.preventDefault();
-            this.submit(e.target);
+        $(form).on("submit", (event) => {
+            event.preventDefault();
+            this.submit(event.currentTarget);
         });
-
     });
 };
